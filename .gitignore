@@ -1,0 +1,48 @@
+# STM32CubeIDE / Eclipse local metadata
+.settings/
+.metadata/
+*.launch
+
+# VS Code local workspace files
+.vscode/
+*.code-workspace
+
+# Clangd local config/cache
+.clangd
+.cache/
+
+# Build outputs
+/Debug/
+/Release/
+/build/
+/cmake-build-*/
+/out/
+/dist/
+
+# Compiler / linker outputs
+*.o
+*.obj
+*.d
+*.su
+*.cyclo
+*.lst
+*.list
+*.map
+*.elf
+*.axf
+*.hex
+*.bin
+*.srec
+*.a
+*.lib
+
+# Dependency / generated make files
+makefile
+objects.list
+objects.mk
+sources.mk
+subdir.mk
+
+# OS noise
+Thumbs.db
+.DS_Store

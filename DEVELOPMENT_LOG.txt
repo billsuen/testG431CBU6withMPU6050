@@ -1,0 +1,58 @@
+STM32G431CBU6 + MPU6050 + OLED 氣泡水平儀開發紀錄
+===========================================================
+
+1. 硬體配置 (Hardware Configuration)
+----------------------------------
+* MCU: STM32G431CBU6 (170MHz, FPU Enabled)
+* 開關 (SW): PC13, 設為 EXTI Rising Edge, 內建下拉 (Active High)
+* 指示燈 (IND): PC6, Output
+* 顯示器: OLED 128x64, I2C3 (PA8/PC11), 提升至 400kHz
+* 感測器: MPU6050, I2C1, 地址 0xD0
+
+2. 軟體架構 (Software Architecture)
+----------------------------------
+基於 FreeRTOS CMSIS-RTOS v2 實作：
+
+A. defaultTask (按鍵任務 - Normal Priority)
+   - 職責：等待 EXTI 訊號量，處理按鍵去抖、等待釋放流程。
+   - 功能：完成一次按下/釋放後，切換 IND 狀態並發送「校正請求 (calibrate_flag)」。
+
+B. bubbleLevelTask (水平儀任務 - BelowNormal Priority)
+   - 職責：高頻率讀取感測器、姿態解算、顯存繪圖、更新螢幕。
+   - 週期：10ms (100Hz)
+
+3. 關鍵技術實作 (Key Implementations)
+-----------------------------------
+
+A. 姿態融合：互補濾波 (Complementary Filter)
+   - 公式：Angle = 0.90 * (Angle + Gyro * dt) + 0.10 * Accel_Angle
+   - 優點：結合陀螺儀的即時性與加速度計的靜態穩定性，消除單純使用加速度計的震動感。
+
+B. 顯示技術：顯存緩衝 (Frame Buffer)
+   - 機制：在 RAM 中建立 1024 Byte 緩衝區 (OLED_Buffer)。
+   - 優點：突破 OLED Page 定址限制，實現 X/Y 軸雙向「1 像素」精度的平滑移動。
+
+C. 抗抖動技術 (Anti-Jitter)
+   - 硬體層：開啟 MPU6050 內建 DLPF (42Hz) 濾除高頻噪訊。
+   - 軟體層：輸出座標二次平滑 (Lerp)，公式：Smooth = (Smooth * 0.85) + (Target * 0.15)。
+
+D. 自動與手動校正 (Calibration)
+   - 自動：上電 300ms 後感測器穩定，自動執行第一次採樣定義原點。
+   - 手動：按一下 PC13，將當前姿態立即記錄為偏移量 (Offset)，氣泡歸零。
+
+4. 專案文件說明 (File Structure)
+------------------------------
+* Core/Src/service.c: 核心邏輯存放處 (中斷回呼、濾波演算法、顯存繪圖)。
+* Core/Inc/service.h: 變數與函式宣告。
+* Core/Src/app_freertos.c: FreeRTOS 任務建立與調度。
+* Core/Src/gpio.c & i2c.c: 底層硬體初始化配置。
+
+5. 未來擴充建議 (Future Roadmap)
+------------------------------
+* 若要實作自穩平台 (PID + Servo)，建議將 MPU6050 改為 SPI 介面以降低通訊延遲。
+* 推薦感測器：ICM-42688-P (低雜訊、抗震動強)。
+* 建議加入 DMA (Direct Memory Access) 傳輸顯存數據，以完全釋放 CPU 負擔。
+
+===========================================================
+紀錄時間：2026年4月1日
+開發環境：STM32CubeIDE / Gemini CLI
