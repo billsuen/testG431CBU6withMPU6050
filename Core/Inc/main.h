@@ -60,6 +60,9 @@ void Error_Handler(void);
 #define SW_Pin GPIO_PIN_13
 #define SW_GPIO_Port GPIOC
 #define SW_EXTI_IRQn EXTI15_10_IRQn
+#define MPUINT_Pin GPIO_PIN_14
+#define MPUINT_GPIO_Port GPIOB
+#define MPUINT_EXTI_IRQn EXTI15_10_IRQn
 #define IND_Pin GPIO_PIN_6
 #define IND_GPIO_Port GPIOC
 

@@ -45,11 +45,18 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-osThreadId_t bubbleLevelTaskHandle;
-const osThreadAttr_t bubbleLevelTask_attributes = {
-  .name = "bubbleLevelTask",
-  .priority = (osPriority_t) osPriorityBelowNormal,
-  .stack_size = 256 * 4
+osThreadId_t mpuReadTaskHandle;
+const osThreadAttr_t mpuReadTask_attributes = {
+  .name = "mpuReadTask",
+  .priority = (osPriority_t) osPriorityAboveNormal,
+  .stack_size = 512 * 4
+};
+
+osThreadId_t oledTaskHandle;
+const osThreadAttr_t oledTask_attributes = {
+  .name = "oledTask",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 512 * 4
 };
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -62,7 +69,8 @@ const osThreadAttr_t defaultTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-void StartBubbleLevelTask(void *argument);
+void StartMpuReadTask(void *argument);
+void StartOledTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -76,7 +84,7 @@ void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
   */
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
-  Service_Init();
+  Service_Init(); // 僅建立核心物件
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -84,7 +92,6 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
-  /* 訊號量已在 Service_Init() 中建立 */
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -100,8 +107,8 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* 建立 MPU6050 水平尺更新任務 */
-  bubbleLevelTaskHandle = osThreadNew(StartBubbleLevelTask, NULL, &bubbleLevelTask_attributes);
+  mpuReadTaskHandle = osThreadNew(StartMpuReadTask, NULL, &mpuReadTask_attributes);
+  oledTaskHandle = osThreadNew(StartOledTask, NULL, &oledTask_attributes);
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -123,7 +130,6 @@ void StartDefaultTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-    /* 呼叫 service.c 中的按鍵處理邏輯 (包含按下/釋放判斷與去抖) */
     Button_Process_Task();
   }
   /* USER CODE END StartDefaultTask */
@@ -131,10 +137,11 @@ void StartDefaultTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-void StartBubbleLevelTask(void *argument) {
-  for(;;) {
-    MPU6050_BubbleLevel_Task();
-  }
+void StartMpuReadTask(void *argument) {
+  MPU6050_Read_Task();
+}
+
+void StartOledTask(void *argument) {
+  OLED_Display_Task();
 }
 /* USER CODE END Application */
-

@@ -1,56 +1,63 @@
 # testG431CBU6withMPU6050
 
-這是一個以 `STM32G431CBU6` 為核心的電子水平儀專案。系統透過 `MPU6050` 讀取加速度計與陀螺儀資料，使用一維 Kalman Filter 融合姿態角，再把結果顯示在 `128x64 OLED` 上，形成可視化的氣泡水平儀。
+這是一個以 `STM32G431CBU6` 為 MCU 的電子氣泡水平儀專案。系統透過 `MPU6050` / `MPU6500` 讀取三軸加速度計與三軸陀螺儀資料，使用一維 Kalman Filter 融合 X/Y 傾角，並將結果顯示在 `SSD1306` 128x64 OLED 上。
 
-專案使用：
+> 注意：實際感測器回應 `WHO_AM_I = 0x70`，因此它更可能是 `MPU6500` 或其變體，而非原廠 `MPU6050`。
 
-- `STM32CubeMX` 產生周邊初始化
+專案特色：
+
+- `STM32CubeMX` 產生硬體與週邊初始化
 - `FreeRTOS CMSIS-V2` 管理任務
-- `I2C1` 連接 `MPU6050`
-- `I2C3` 連接 `OLED SSD1306` 類 128x64 顯示器
+- `I2C1` 連接 `MPU6050 / MPU6500`
+- `I2C3` 連接 `SSD1306` 128x64 OLED
 - `PC13` 作為校正按鍵 `SW`
-- `PC6` 作為指示輸出 `IND`
+- `PC6` 作為狀態指示燈 `IND`
 
 ## 功能摘要
 
-- 開機初始化 OLED，顯示系統啟動與感測器狀態
-- 自動偵測 `MPU6050` 的 `WHO_AM_I`
-- 啟用 `MPU6050` 並設定硬體低通濾波 `DLPF = 42Hz`
-- 週期性讀取加速度與陀螺儀資料
-- 使用 `Kalman_Update()` 計算 X/Y 傾角
-- 支援按鍵歸零校正
-- 將角度映射成螢幕座標並做二次平滑，降低氣泡抖動
+- OLED 開機顯示系統與感測器狀態
+- 自動偵測 `MPU6050 / MPU6500`
+- 支援 I2C 地址 `0xD0` 與 `0xD2`
+- 喚醒感測器並設定加速度計 DHPF 與平均值
+- 透過 MPU 中斷驅動讀取資料
+- 使用 Kalman Filter 融合 X/Y 角度
+- 支援按鍵校正水平零點
+- 將角度映射到 OLED 氣泡座標，並做顯示平滑
 
 ## 系統流程
 
-1. `main()` 完成 HAL、GPIO、I2C、USART 初始化。
-2. `Service_OLED_DisplayInfo()` 初始化 OLED 並檢查 MPU6050 是否存在。
-3. `MX_FREERTOS_Init()` 內呼叫 `Service_Init()`，建立 semaphore 並初始化兩組 Kalman 濾波器。
-4. `defaultTask` 持續執行 `Button_Process_Task()`，負責按鍵消抖與重新校正。
-5. `bubbleLevelTask` 持續執行 `MPU6050_BubbleLevel_Task()`，每次約 `10ms` 更新一次姿態與畫面。
+1. `main()` 初始化 HAL、時鐘、GPIO、I2C、USART，以及 FreeRTOS。
+2. `MX_FREERTOS_Init()` 呼叫 `Service_Init()`，建立按鍵與 MPU 中斷 semaphore，並初始化 `kalmanX`、`kalmanY`。
+3. 建立三個任務：
+   - `defaultTask`：執行 `Button_Process_Task()`，處理按鍵消抖與校正請求
+   - `mpuReadTask`：執行 `MPU6050_Read_Task()`，等待 MPU 中斷並讀取感測器資料
+   - `oledTask`：執行 `OLED_Display_Task()`，更新 OLED 顯示
+4. `MPU6050_Sensor_Init()` 嘗試讀取 `WHO_AM_I`，若成功則重置、喚醒感測器，並設定加速度計配置與中斷行為。
+5. `MPU6050_Read_Task()` 讀取 14 字節感測器資料，計算時間差 `dt`，並以 Kalman Filter 融合角度。
+6. `OLED_Display_Task()` 將融合後角度映射成 OLED 上的氣泡座標，繪製十字基準線與氣泡，平滑顯示。
 
-## 專案結構
+## 主要檔案
 
 - `Core/Src/main.c`
-  系統進入點與周邊初始化。
+  系統進入點與週邊初始化
 - `Core/Src/app_freertos.c`
-  FreeRTOS 任務建立與排程入口。
+  FreeRTOS 任務建立與排程
 - `Core/Src/service.c`
-  專案主邏輯，包含 OLED 畫面更新、MPU6050 讀取、姿態換算、校正與按鍵處理。
+  主邏輯：OLED 顯示、MPU6050/MPU6500 初始化與讀取、Kalman 濾波、按鍵校正
 - `Core/Src/kalman.c`
-  一維 Kalman Filter 實作。
+  一維 Kalman Filter 實作
 - `Core/Inc/service.h`
-  對外服務函式宣告。
+  服務函式宣告
 - `Core/Inc/kalman.h`
-  Kalman 狀態結構與 API。
+  Kalman 結構與 API
 - `Core/OLED_128x64/OLED128x64_Fast.*`
-  OLED 顯示驅動。
+  OLED 顯示驅動
 - `testG431CBU6withMPU6050.ioc`
-  STM32CubeMX 專案設定。
+  STM32CubeMX 專案設定
 - `CMakeLists.txt`
-  CMake 建置入口。
+  CMake 建置入口
 
-## 主要函式說明
+## 主要功能說明
 
 ### `Service_Init(void)`
 
@@ -58,51 +65,56 @@
 
 用途：
 
-- 建立按鍵用 binary semaphore
-- 初始化 `kalmanX` 與 `kalmanY`
+- 建立按鍵 semaphore `binSemButtonHandle`
+- 建立 MPU 中斷 semaphore `binSemMpuIntHandle`
+- 初始化 Kalman Filter 物件 `kalmanX`、`kalmanY`
 
-目前預設參數：
+預設參數：
 
 ```c
 Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.01f);
 Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
 ```
 
-### `Service_OLED_DisplayInfo(void)`
+### `MPU6050_Sensor_Init(void)`
 
 位置：`Core/Src/service.c`
 
 用途：
 
-- 初始化 OLED
-- 顯示開機訊息
-- 透過 `I2C1` 讀取 `MPU6050` 的 `WHO_AM_I`
-- 嘗試位址 `0xD0`，若失敗再試 `0xD2`
-- 成功後喚醒感測器，並設定 DLPF
+- 透過 `I2C1` 讀取 `MPU6050` / `MPU6500` 的 `WHO_AM_I`
+- 若回應 `0x70`，表示感測器更可能為 `MPU6500` 或其變體
+- 支援 `0xD0` 和 `0xD2` 兩個 I2C 地址
+- 若偵測到感測器，則重置並喚醒裝置
+- 設定加速度計 DHPF 與平均樣本數
+- 初始化中斷與 WoM 設定
 
-### `MPU6050_BubbleLevel_Task(void)`
+### `MPU6050_Read_Task(void)`
 
 位置：`Core/Src/service.c`
 
 用途：
 
-- 讀取 `MPU6050` 的 14-byte 資料區
-- 計算 `dt`
-- 將加速度資料換算成 `accel_angle_x`、`accel_angle_y`
-- 將陀螺儀原始值扣除偏移後換算成角速度
-- 執行校正流程
-- 呼叫 `Kalman_Update()` 融合角度
-- 將角度轉成 OLED 上的氣泡座標
-- 再做一次線性平滑，降低顯示抖動
-- 重繪十字基準線與氣泡
+- 等待 `binSemMpuIntHandle`
+- 讀取 `MPU6050_INT_STATUS`
+- 讀取 14 字節加速度與陀螺儀資料
+- 計算時間差 `dt`
+- 將原始加速度資料轉換成 `accel_angle_x`、`accel_angle_y`
+- 扣除陀螺儀偏移並轉成角速度
+- 執行按鍵校正與零點更新
+- 呼叫 `Kalman_Update()` 計算濾波後角度
 
-更新週期：
+### `OLED_Display_Task(void)`
 
-```c
-osDelay(10);
-```
+位置：`Core/Src/service.c`
 
-也就是約 `100Hz`。
+用途：
+
+- 初始化 OLED 並顯示開機資訊
+- 清除顯示後進入主迴圈
+- 讀取濾波後角度與校正偏移
+- 轉換成 OLED 氣泡座標
+- 繪製十字線與氣泡，並刷新顯示
 
 ### `Button_Process_Task(void)`
 
@@ -110,23 +122,15 @@ osDelay(10);
 
 用途：
 
-- 等待外部中斷釋放 semaphore
-- 進行簡單消抖
+- 等待按鍵中斷 semaphore
+- 執行簡單消抖
 - 等待按鍵放開
 - 設定 `calibrate_flag = 1`
-- 切換 `IND` 腳位狀態作為提示
+- 觸發下一次讀取時進行校正
 
-### `HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)`
+## Kalman Filter API
 
-位置：`Core/Src/service.c`
-
-用途：
-
-- 當 `SW_Pin` 產生 EXTI 中斷時，釋放 `binSemButtonHandle`
-
-## Kalman Filter API 用法
-
-### 資料結構
+### 結構
 
 ```c
 typedef struct {
@@ -138,6 +142,40 @@ typedef struct {
     float P[2][2];
 } Kalman_t;
 ```
+
+### `Kalman_Init(Kalman_t *Kalman, float Q_angle, float Q_bias, float R_measure)`
+
+用途：
+
+- 初始化 Kalman 參數
+- 將 `angle`、`bias` 與誤差協方差矩陣清零
+
+### `Kalman_Update(Kalman_t *Kalman, float newAngle, float newRate, float dt)`
+
+用途：
+
+- 結合加速度計角度 `newAngle`
+- 結合陀螺儀角速度 `newRate`
+- 使用時間差 `dt` 計算濾波後角度
+- 回傳融合後角度
+
+## 角度映射與平滑
+
+在 `OLED_Display_Task()` 中，傾角會映射成 OLED 氣泡座標：
+
+```c
+float target_x = 64.0f + ((local_angle_x - local_offset_x) * 2.0f);
+float target_y = 32.0f - ((local_angle_y - local_offset_y) * 2.0f);
+```
+
+中心點 `(64, 32)` 代表校正後水平位置。透過平滑公式：
+
+```c
+smooth_x = smooth_x * 0.5f + target_x * 0.5f;
+smooth_y = smooth_y * 0.5f + target_y * 0.5f;
+```
+
+降低顯示抖動，使氣泡運動更穩定。
 
 ### `Kalman_Init(Kalman_t *Kalman, float Q_angle, float Q_bias, float R_measure)`
 
