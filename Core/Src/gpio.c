@@ -62,12 +62,6 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(SW_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : MPUINT_Pin */
-  GPIO_InitStruct.Pin = MPUINT_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(MPUINT_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : PG10 */
   GPIO_InitStruct.Pin = GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
@@ -102,6 +96,12 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : MPUINT_Pin */
+  GPIO_InitStruct.Pin = MPUINT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(MPUINT_GPIO_Port, &GPIO_InitStruct);
+
   /*Configure GPIO pin : IND_Pin */
   GPIO_InitStruct.Pin = IND_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -110,8 +110,7 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(IND_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  // 將優先權設為 6，確保低於 SYSCALL 優先權 (5)
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 6, 0);
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 5, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
