@@ -106,6 +106,11 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 
     __HAL_RCC_I2C1_CLK_ENABLE();
 
+    /* USER CODE BEGIN I2C1_MspInit_DMA */
+    /* ============================================ */
+    /* I2C1 DMA 配置（手動添加，受 CubeMX 保護）*/
+    /* ============================================ */
+	
     /* DMA & DMAMUX Clock Enable */
     __HAL_RCC_DMAMUX1_CLK_ENABLE();
     __HAL_RCC_DMA1_CLK_ENABLE();
@@ -136,6 +141,8 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     HAL_NVIC_EnableIRQ(I2C1_EV_IRQn);
     HAL_NVIC_SetPriority(I2C1_ER_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(I2C1_ER_IRQn);
+
+	/* USER CODE END I2C1_MspInit_DMA */
   }
   else if(i2cHandle->Instance==I2C3)
   {
@@ -174,9 +181,13 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* i2cHandle)
     __HAL_RCC_I2C1_CLK_DISABLE();
     HAL_GPIO_DeInit(GPIOA, GPIO_PIN_15);
     HAL_GPIO_DeInit(GPIOB, GPIO_PIN_7);
+
+	/* USER CODE BEGIN I2C1_MspDeInit_DMA */
     HAL_DMA_DeInit(i2cHandle->hdmarx);
+	HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn);
     HAL_NVIC_DisableIRQ(I2C1_EV_IRQn);
     HAL_NVIC_DisableIRQ(I2C1_ER_IRQn);
+	/* USER CODE END I2C1_MspDeInit_DMA */
   }
   else if(i2cHandle->Instance==I2C3)
   {
