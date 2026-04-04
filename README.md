@@ -18,11 +18,11 @@
 - OLED 開機顯示系統與感測器狀態
 - 自動偵測 `MPU6050 / MPU6500`
 - 支援 I2C 地址 `0xD0` 與 `0xD2`
-- 喚醒感測器並設定加速度計 DHPF 與平均值
-- 透過 MPU 中斷驅動讀取資料
-- 使用 Kalman Filter 融合 X/Y 角度
+- 喚醒感測器並設定 100Hz 採樣率與 DLPF
+- 透過 MPU 中斷驅動 DMA 讀取資料
+- 使用 Kalman Filter 融合 X/Y 角度（調整參數提升靈敏度）
 - 支援按鍵校正水平零點
-- 將角度映射到 OLED 氣泡座標，並做顯示平滑
+- 將角度映射到 OLED 氣泡座標，無額外平滑以反映真實動態
 
 ## 系統流程
 
@@ -32,9 +32,9 @@
    - `defaultTask`：執行 `Button_Process_Task()`，處理按鍵消抖與校正請求
    - `mpuReadTask`：執行 `MPU6050_Read_Task()`，等待 MPU 中斷並讀取感測器資料
    - `oledTask`：執行 `OLED_Display_Task()`，更新 OLED 顯示
-4. `MPU6050_Sensor_Init()` 嘗試讀取 `WHO_AM_I`，若成功則重置、喚醒感測器，並設定加速度計配置與中斷行為。
-5. `MPU6050_Read_Task()` 讀取 14 字節感測器資料，計算時間差 `dt`，並以 Kalman Filter 融合角度。
-6. `OLED_Display_Task()` 將融合後角度映射成 OLED 上的氣泡座標，繪製十字基準線與氣泡，平滑顯示。
+4. `MPU6050_Sensor_Init()` 嘗試讀取 `WHO_AM_I`，若成功則重置、喚醒感測器，並設定 100Hz 採樣率與 DLPF。
+5. `MPU6050_Read_Task()` 等待 MPU 中斷，使用 DMA 讀取 14 字節感測器資料，計算時間差 `dt`，並以 Kalman Filter 融合角度。
+6. `OLED_Display_Task()` 將融合後角度映射成 OLED 上的氣泡座標，繪製十字基準線與氣泡，無額外平滑。
 
 ## 主要檔案
 
@@ -67,13 +67,14 @@
 
 - 建立按鍵 semaphore `binSemButtonHandle`
 - 建立 MPU 中斷 semaphore `binSemMpuIntHandle`
+- 建立 I2C1 DMA 完成 semaphore `binSemI2c1DoneHandle`
 - 初始化 Kalman Filter 物件 `kalmanX`、`kalmanY`
 
 預設參數：
 
 ```c
-Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.01f);
-Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
+Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.005f);
+Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.005f);
 ```
 
 ### `MPU6050_Sensor_Init(void)`
@@ -86,8 +87,8 @@ Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
 - 若回應 `0x70`，表示感測器更可能為 `MPU6500` 或其變體
 - 支援 `0xD0` 和 `0xD2` 兩個 I2C 地址
 - 若偵測到感測器，則重置並喚醒裝置
-- 設定加速度計 DHPF 與平均樣本數
-- 初始化中斷與 WoM 設定
+- 設定 100Hz 採樣率與 DLPF
+- 初始化中斷設定
 
 ### `MPU6050_Read_Task(void)`
 
@@ -97,12 +98,13 @@ Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
 
 - 等待 `binSemMpuIntHandle`
 - 讀取 `MPU6050_INT_STATUS`
-- 讀取 14 字節加速度與陀螺儀資料
+- 使用 DMA 讀取 14 字節加速度與陀螺儀資料，並等待 `binSemI2c1DoneHandle`
 - 計算時間差 `dt`
 - 將原始加速度資料轉換成 `accel_angle_x`、`accel_angle_y`
 - 扣除陀螺儀偏移並轉成角速度
 - 執行按鍵校正與零點更新
 - 呼叫 `Kalman_Update()` 計算濾波後角度
+- 若 DMA 失敗，提供後備阻塞讀取機制
 
 ### `OLED_Display_Task(void)`
 
@@ -114,6 +116,7 @@ Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
 - 清除顯示後進入主迴圈
 - 讀取濾波後角度與校正偏移
 - 轉換成 OLED 氣泡座標
+- 無額外平滑，直接反映角度變化
 - 繪製十字線與氣泡，並刷新顯示
 
 ### `Button_Process_Task(void)`
@@ -165,14 +168,7 @@ typedef struct {
 
 ```c
 float target_x = 64.0f + ((local_angle_x - local_offset_x) * 2.0f);
-float target_y = 32.0f - ((local_angle_y - local_offset_y) * 2.0f);
-```
-
-中心點 `(64, 32)` 代表校正後水平位置。透過平滑公式：
-
-```c
-smooth_x = smooth_x * 0.5f + target_x * 0.5f;
-smooth_y = smooth_y * 0.5f + target_y * 0.5f;
+float target_y = 32.0f - 為了反映真實動態，移除額外平滑，直接使用 `target_x` 和 `target_y`th_y * 0.5f + target_y * 0.5f;
 ```
 
 降低顯示抖動，使氣泡運動更穩定。
