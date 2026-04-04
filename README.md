@@ -12,6 +12,7 @@
 - `I2C3` 連接 `SSD1306` 128x64 OLED
 - `PC13` 作為校正按鍵 `SW`
 - `PC6` 作為狀態指示燈 `IND`
+- **🔹 OLED 高效動畫控制**：雙緩衝區 + 區域刷新技術，實現流暢氣泡動畫同時節省 I2C 頻寬
 
 ## 功能摘要
 
@@ -22,6 +23,7 @@
 - 透過 MPU 中斷驅動 DMA 讀取資料
 - 使用 Kalman Filter 融合 X/Y 角度（調整參數提升靈敏度）
 - 支援按鍵校正水平零點
+- **🔹 OLED 高效動畫顯示**：使用雙緩衝區技術，實現區域刷新與背景恢復，極大減少 I2C 通信量，提升動畫流暢度
 - 將角度映射到 OLED 氣泡座標，無額外平滑以反映真實動態
 
 ## 系統流程
@@ -31,10 +33,10 @@
 3. 建立三個任務：
    - `defaultTask`：執行 `Button_Process_Task()`，處理按鍵消抖與校正請求
    - `mpuReadTask`：執行 `MPU6050_Read_Task()`，等待 MPU 中斷並讀取感測器資料
-   - `oledTask`：執行 `OLED_Display_Task()`，更新 OLED 顯示
+   - `oledTask`：執行 `OLED_Display_Task()`，**🔹 使用高效動畫技術更新 OLED 顯示**
 4. `MPU6050_Sensor_Init()` 嘗試讀取 `WHO_AM_I`，若成功則重置、喚醒感測器，並設定 100Hz 採樣率與 DLPF。
 5. `MPU6050_Read_Task()` 等待 MPU 中斷，使用 DMA 讀取 14 字節感測器資料，計算時間差 `dt`，並以 Kalman Filter 融合角度。
-6. `OLED_Display_Task()` 將融合後角度映射成 OLED 上的氣泡座標，繪製十字基準線與氣泡，無額外平滑。
+6. `OLED_Display_Task()` **🔹 初始化雙緩衝區，繪製靜態十字背景並備份；動態更新時僅刷新變化的區域，實現高效氣泡動畫**。
 
 ## 主要檔案
 
@@ -51,7 +53,7 @@
 - `Core/Inc/kalman.h`
   Kalman 結構與 API
 - `Core/OLED_128x64/OLED128x64_Fast.*`
-  OLED 顯示驅動
+  **🔹 更新**：OLED 高效驅動，支援 I2C Timeout 自動跳脫機制，確保系統穩定性
 - `testG431CBU6withMPU6050.ioc`
   STM32CubeMX 專案設定
 - `CMakeLists.txt`
@@ -112,12 +114,49 @@ Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.005f);
 
 用途：
 
-- 初始化 OLED 並顯示開機資訊
-- 清除顯示後進入主迴圈
-- 讀取濾波後角度與校正偏移
-- 轉換成 OLED 氣泡座標
-- 無額外平滑，直接反映角度變化
-- 繪製十字線與氣泡，並刷新顯示
+- **🔹 高效 OLED 動畫顯示任務**
+- 初始化雙緩衝區：`OLED_Buffer` (動態繪圖) 與 `OLED_Background` (靜態背景)
+- 繪製十字基準線並備份到背景緩衝區
+- 動態計算氣泡位置，限制邊界防止出界
+- 使用區域刷新技術：僅更新舊位置與新位置的像素區域，極大減少 I2C 通信
+- 實現流暢的氣泡動畫，每 30ms 更新一次
+
+### `OLED_DrawPixel(int x, int y, uint8_t color)`
+
+位置：`Core/Src/service.c`
+
+用途：
+
+- 在 OLED_Buffer 中繪製單個像素
+- 支持黑色 (0) 和白色 (1) 顏色
+
+### `OLED_DrawBubble(int x, int y, uint8_t color)`
+
+位置：`Core/Src/service.c`
+
+用途：
+
+- 在指定位置繪製 8x8 氣泡圖形
+- 使用 OLED_DrawPixel 實現圓形氣泡
+
+### `OLED_Refresh_Region(int x, int y, int w, int h)`
+
+位置：`Core/Src/service.c`
+
+用途：
+
+- **🔹 區域刷新核心函式**
+- 僅傳送指定矩形區域的緩衝區資料到 OLED
+- 極大節省 I2C 頻寬，提升動畫性能
+
+### `OLED_Restore_BG(int x, int y, int w, int h)`
+
+位置：`Core/Src/service.c`
+
+用途：
+
+- 從 OLED_Background 恢復指定區域到 OLED_Buffer
+- 用於清除舊的動態元素，準備繪製新位置
 
 ### `Button_Process_Task(void)`
 

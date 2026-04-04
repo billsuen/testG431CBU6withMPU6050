@@ -14,6 +14,7 @@
 #include "kalman.h"
 #include "stm32g4xx_hal_i2c.h"
 #include <math.h>
+#include <string.h>
 
 /* Private variables ---------------------------------------------------------*/
 osSemaphoreId_t binSemButtonHandle;
@@ -38,6 +39,7 @@ static Kalman_t kalmanX;
 static Kalman_t kalmanY;
 
 static uint8_t OLED_Buffer[1024];
+static uint8_t OLED_Background[1024]; // 🔹 存放靜態背景 (十字線)
 
 #define MPU6050_ADDR         0xD0
 #define MPU6050_PWR_MGMT_1   0x6B
@@ -50,44 +52,19 @@ static uint8_t OLED_Buffer[1024];
 
 #define RAD_TO_DEG     57.2957795f
 
-/* --- 顯存繪圖函式 (含局部刷新優化) --- */
-
-static uint8_t OLED_DirtyPages = 0x00; // 用位元表示 0-7 頁是否需要更新
+/* --- 顯存繪圖函式 (含 Window Update 與 memcpy 優化) --- */
 
 /**
- * @brief 清空顯存緩衝區
- */
-void OLED_Clear_Buffer(void) {
-  for(int i=0; i<1024; i++) OLED_Buffer[i] = 0;
-  OLED_DirtyPages = 0xFF; // 清除後標記所有頁面需要刷新
-}
-
-/**
- * @brief 繪製像素並追蹤變動區域 (Dirty Page Tracking)
+ * @brief 繪製像素
  */
 void OLED_DrawPixel(int x, int y, uint8_t color) {
   if (x < 0 || x > 127 || y < 0 || y > 63) return;
-  
-  uint8_t page = y / 8;
-  uint8_t bit = 1 << (y % 8);
-  uint16_t idx = x + page * 128;
-  
-  if (color) {
-    if (!(OLED_Buffer[idx] & bit)) { // 只有在值改變時才標記髒頁
-      OLED_Buffer[idx] |= bit;
-      OLED_DirtyPages |= (1 << page);
-    }
-  } else {
-    if (OLED_Buffer[idx] & bit) {
-      OLED_Buffer[idx] &= ~bit;
-      OLED_DirtyPages |= (1 << page);
-    }
-  }
+  if (color) OLED_Buffer[x + (y / 8) * 128] |= (1 << (y % 8));
+  else       OLED_Buffer[x + (y / 8) * 128] &= ~(1 << (y % 8));
 }
 
 /**
- * @brief 繪製或擦除小球
- * @param color 1: 畫白色球, 0: 畫黑色(擦除)
+ * @brief 繪製小球
  */
 void OLED_DrawBubble(int x, int y, uint8_t color) {
   static const uint8_t bubble_bmp[] = {0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C};
@@ -101,37 +78,46 @@ void OLED_DrawBubble(int x, int y, uint8_t color) {
 }
 
 /**
- * @brief 修補背景十字線 (防止小球移開後留下空洞)
- * @param x, y 小球之前的座標
+ * @brief 🔹 區域刷新：只傳送指定矩形區域的資料到 OLED (極大節省 I2C 頻寬)
  */
-void OLED_Repair_Crosshair(int x, int y) {
-  // 檢查小球擦除區域 (約 8x8) 是否覆蓋了水平線 (y=32)
-  if (32 >= (y - 4) && 32 <= (y + 4)) {
-    for (int i = x - 4; i <= x + 4; i++) {
-      if (i >= 0 && i < 128) OLED_DrawPixel(i, 32, 1);
-    }
-  }
-  // 檢查小球擦除區域是否覆蓋了垂直線 (x=64)
-  if (64 >= (x - 4) && 64 <= (x + 4)) {
-    for (int j = y - 4; j <= y + 4; j++) {
-      if (j >= 0 && j < 64) OLED_DrawPixel(64, j, 1);
-    }
+void OLED_Refresh_Region(int x, int y, int w, int h) {
+  int start_page = y / 8;
+  int end_page = (y + h - 1) / 8;
+  // 邊界檢查
+  if (x < 0) { w += x; x = 0; }
+  if (x + w > 128) w = 128 - x;
+  if (w <= 0) return;
+
+  for (int p = start_page; p <= end_page; p++) {
+    if (p < 0 || p > 7) continue;
+    OLED_Set_Pos(x, p); // 設定 OLED 游標位置
+    // 🔹 只傳送該 Page 中受影響的 w 個 Byte
+    HAL_I2C_Mem_Write(&hi2c3, OLED_ADDRESS, 0x40, 1, &OLED_Buffer[x + p * 128], w, 10);
   }
 }
 
 /**
- * @brief 執行局部刷新：只將有變動的頁面送往 OLED
+ * @brief 🔹 恢復背景：從背景緩衝區快速拷貝資料回顯存 (使用 memcpy)
  */
-void OLED_Refresh(void) {
-  if (OLED_DirtyPages == 0) return; // 沒有變動則直接跳過
-  
-  for (uint8_t i = 0; i < 8; i++) {
-    if (OLED_DirtyPages & (1 << i)) {
-      OLED_Set_Pos(0, i);
-      HAL_I2C_Mem_Write(&hi2c3, OLED_ADDRESS, 0x40, 1, &OLED_Buffer[128 * i], 128, 100);
-    }
+void OLED_Restore_BG(int x, int y, int w, int h) {
+  int start_page = y / 8;
+  int end_page = (y + h - 1) / 8;
+  for (int p = start_page; p <= end_page; p++) {
+    if (p < 0 || p > 7) continue;
+    int offset = x + p * 128;
+    int copy_w = (128 - x < w) ? (128 - x) : w;
+    if (copy_w > 0) memcpy(&OLED_Buffer[offset], &OLED_Background[offset], copy_w);
   }
-  OLED_DirtyPages = 0; // 清除髒頁標記
+}
+
+/**
+ * @brief 全螢幕刷新
+ */
+void OLED_Refresh_All(void) {
+  for (uint8_t i = 0; i < 8; i++) {
+    OLED_Set_Pos(0, i);
+    HAL_I2C_Mem_Write(&hi2c3, OLED_ADDRESS, 0x40, 1, &OLED_Buffer[128 * i], 128, 100);
+  }
 }
 
 /* --- 初始化服務函式 --- */
@@ -257,11 +243,15 @@ void OLED_Display_Task(void) {
   OLED_Display_Init();
   osDelay(3000);
 
-  // --- 初始繪製背景 ---
-  OLED_Clear_Buffer();
-  for(int i=0; i<128; i++) OLED_DrawPixel(i, 32, 1); // 畫水平線
-  for(int i=0; i<64; i++)  OLED_DrawPixel(64, i, 1);  // 畫垂直線
-  OLED_Refresh(); // 首次全屏刷新
+  // --- 🔹 初始繪製背景並保存 ---
+  memset(OLED_Buffer, 0, 1024);
+  // 畫十字線到 Buffer
+  for(int i=0; i<128; i++) OLED_DrawPixel(i, 32, 1); 
+  for(int i=0; i<64; i++)  OLED_DrawPixel(64, i, 1); 
+  // 🔹 將繪製好的背景備份到 Background Buffer
+  memcpy(OLED_Background, OLED_Buffer, 1024);
+  
+  OLED_Refresh_All(); // 首次全屏刷新
 
   static float last_x = 64.0f;
   static float last_y = 32.0f;
@@ -277,27 +267,25 @@ void OLED_Display_Task(void) {
     float target_x = 64.0f + ((local_angle_x - local_offset_x) * 2.0f); 
     float target_y = 32.0f - ((local_angle_y - local_offset_y) * 2.0f);
 
-    // 限制範圍防止小球出界
+    // 限制範圍防止小球出界 (留 4 像素邊距)
     if (target_x < 4) target_x = 4; if (target_x > 123) target_x = 123;
     if (target_y < 4) target_y = 4; if (target_y > 59) target_y = 59;
 
     uint32_t current_time = osKernelGetTickCount();
-    // 局部刷新效率高，可提高頻率至約 33fps (30ms)
     if (current_time - last_refresh_time >= 30) {
-
-      // 1. 擦除「舊位置」的小球 (畫黑色)
-      OLED_DrawBubble((int)last_x, (int)last_y, 0);
-
-      // 2. 修補被小球蓋住過的背景十字線
-      OLED_Repair_Crosshair((int)last_x, (int)last_y);
-
-      // 3. 在「新位置」畫小球 (畫白色)
+      
+      // 1. 🔹 恢復「舊位置」的背景 (使用 memcpy，範圍 8x8)
+      OLED_Restore_BG((int)last_x - 4, (int)last_y - 4, 8, 8);
+      
+      // 2. 🔹 在「新位置」繪製小球 (僅修改 Buffer)
       OLED_DrawBubble((int)target_x, (int)target_y, 1);
-
-      // 4. 執行刷新 (OLED_Refresh 會自動只送出有變動的 Page)
-      OLED_Refresh();
-
-      // 更新舊座標紀錄
+      
+      // 3. 🔹 區域刷新 I2C (僅傳送舊位置與新位置受影響的區域)
+      // 為簡單起見，我們刷新舊位置與新位置的聯集或分別刷新
+      OLED_Refresh_Region((int)last_x - 4, (int)last_y - 4, 8, 8);
+      OLED_Refresh_Region((int)target_x - 4, (int)target_y - 4, 8, 8);
+      
+      // 更新紀錄
       last_x = target_x;
       last_y = target_y;
       last_refresh_time = current_time;
