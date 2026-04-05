@@ -45,6 +45,7 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/service.c
+    Core/Src/OLED_service.c
     Core/Src/kalman.c
     Core/OLED_128x64/OLED128x64_Fast.c
 )

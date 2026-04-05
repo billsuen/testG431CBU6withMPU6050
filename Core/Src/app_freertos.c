@@ -25,6 +25,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "OLED_service.h"
 #include "service.h"
 /* USER CODE END Includes */
 

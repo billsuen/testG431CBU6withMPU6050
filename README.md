@@ -1,446 +1,224 @@
 # testG431CBU6withMPU6050
 
-這是一個以 `STM32G431CBU6` 為 MCU 的電子氣泡水平儀專案。系統透過 `MPU6050` / `MPU6500` 讀取三軸加速度計與三軸陀螺儀資料，使用一維 Kalman Filter 融合 X/Y 傾角，並將結果顯示在 `SSD1306` 128x64 OLED 上。
+這是一個以 `STM32G431CBU6` 為 MCU 的電子氣泡水平儀專案。系統透過 `MPU6050` / `MPU6500` 讀取加速度計與陀螺儀資料，使用一維 Kalman Filter 融合 X/Y 傾角，並將結果顯示在 `SSD1306` 相容的 `128x64 OLED` 上。
 
-> 注意：實際感測器回應 `WHO_AM_I = 0x70`，因此它更可能是 `MPU6500` 或其變體，而非原廠 `MPU6050`。
+> 注意：實際感測器可能回應 `WHO_AM_I = 0x70` 或 `0x71`，因此模組可能是 `MPU6500` 或相容變體，而不一定是原廠 `MPU6050`。
 
-專案特色：
+## 目前功能
 
-- `STM32CubeMX` 產生硬體與週邊初始化
+- `STM32CubeMX` 產生硬體與週邊初始化程式
 - `FreeRTOS CMSIS-V2` 管理任務
 - `I2C1` 連接 `MPU6050 / MPU6500`
-- `I2C3` 連接 `SSD1306` 128x64 OLED
-- `PC13` 作為校正按鍵 `SW`
-- `PC6` 作為狀態指示燈 `IND`
-- **🔹 OLED 高效動畫控制**：雙緩衝區 + 區域刷新技術，實現流暢氣泡動畫同時節省 I2C 頻寬
+- `I2C3` 連接 `OLED`
+- `PC13` 作為校正按鍵
+- `PC6` 作為校正時的狀態指示燈
+- 開機時於 OLED 顯示系統狀態與 MPU 初始化結果
+- 自動偵測 `0xD0` / `0xD2` 兩個感測器位址
+- 設定感測器為 `100Hz` 採樣並啟用中斷
+- 使用 Kalman Filter 融合 X/Y 姿態角
+- 支援按鍵重新校正水平零點
+- OLED 使用背景緩衝與區域刷新，只更新氣泡變動影響的聯集區域
 
-## 功能摘要
+## 系統架構
 
-- OLED 開機顯示系統與感測器狀態
-- 自動偵測 `MPU6050 / MPU6500`
-- 支援 I2C 地址 `0xD0` 與 `0xD2`
-- 喚醒感測器並設定 100Hz 採樣率與 DLPF
-- 透過 MPU 中斷驅動 DMA 讀取資料
-- 使用 Kalman Filter 融合 X/Y 角度（調整參數提升靈敏度）
-- 支援按鍵校正水平零點
-- **🔹 OLED 高效動畫顯示**：使用雙緩衝區技術，實現區域刷新與背景恢復，極大減少 I2C 通信量，提升動畫流暢度
-- 將角度映射到 OLED 氣泡座標，無額外平滑以反映真實動態
+### 任務配置
 
-## 系統流程
+- `defaultTask`
+  呼叫 `Button_Process_Task()`，負責按鍵等待、消抖與校正請求
+- `mpuReadTask`
+  呼叫 `MPU6050_Read_Task()`，負責感測器初始化、資料讀取與 Kalman 更新
+- `oledTask`
+  呼叫 `OLED_Display_Task()`，負責 OLED 初始化、背景建立與氣泡顯示更新
 
-1. `main()` 初始化 HAL、時鐘、GPIO、I2C、USART，以及 FreeRTOS。
-2. `MX_FREERTOS_Init()` 呼叫 `Service_Init()`，建立按鍵與 MPU 中斷 semaphore，並初始化 `kalmanX`、`kalmanY`。
-3. 建立三個任務：
-   - `defaultTask`：執行 `Button_Process_Task()`，處理按鍵消抖與校正請求
-   - `mpuReadTask`：執行 `MPU6050_Read_Task()`，等待 MPU 中斷並讀取感測器資料
-   - `oledTask`：執行 `OLED_Display_Task()`，**🔹 使用高效動畫技術更新 OLED 顯示**
-4. `MPU6050_Sensor_Init()` 嘗試讀取 `WHO_AM_I`，若成功則重置、喚醒感測器，並設定 100Hz 採樣率與 DLPF。
-5. `MPU6050_Read_Task()` 等待 MPU 中斷，使用 DMA 讀取 14 字節感測器資料，計算時間差 `dt`，並以 Kalman Filter 融合角度。
-6. `OLED_Display_Task()` **🔹 初始化雙緩衝區，繪製靜態十字背景並備份；動態更新時僅刷新變化的區域，實現高效氣泡動畫**。
+### 模組分工
+
+- `Core/Src/service.c`
+  MPU 初始化、姿態估測、按鍵處理、服務狀態查詢
+- `Core/Src/OLED_service.c`
+  OLED 顯示邏輯、背景緩衝、氣泡繪製、區域刷新
+- `Core/Src/kalman.c`
+  一維 Kalman Filter 實作
+- `Core/Src/app_freertos.c`
+  FreeRTOS 任務建立與啟動
+
+### 模組依賴圖
+
+```mermaid
+flowchart LR
+    A[main.c] --> B[app_freertos.c]
+    B --> C[service.c]
+    B --> D[OLED_service.c]
+    C --> E[kalman.c]
+    C --> F[i2c.c]
+    C --> G[gpio.c / EXTI callback]
+    D --> C
+    D --> H[OLED128x64_Fast.c]
+    D --> F
+```
+
+依賴關係說明：
+
+- `app_freertos.c` 負責建立任務，分別進入 `service.c` 與 `OLED_service.c`
+- `service.c` 負責 MPU、按鍵與姿態資料，並呼叫 `kalman.c`
+- `OLED_service.c` 不直接碰姿態內部變數，而是透過 `service.h` 提供的查詢介面取值
+- `OLED_service.c` 透過 `OLED128x64_Fast.c` 驅動 OLED，並使用 `i2c.c` 的 `hi2c3`
+
+## 接線對照表
+
+| 功能 | MCU 腳位 | 周邊/訊號 | 說明 |
+| --- | --- | --- | --- |
+| MPU I2C SCL | `PA15` | `I2C1_SCL` | 連接 `MPU6050 / MPU6500` 時脈線 |
+| MPU I2C SDA | `PB7` | `I2C1_SDA` | 連接 `MPU6050 / MPU6500` 資料線 |
+| MPU 中斷 | `PB14` | `MPUINT` | 感測器資料就緒中斷輸入 |
+| OLED I2C SCL | `PA8` | `I2C3_SCL` | 連接 OLED 時脈線 |
+| OLED I2C SDA | `PC11` | `I2C3_SDA` | 連接 OLED 資料線 |
+| 校正按鍵 | `PC13` | `SW` | 上升沿中斷觸發校正請求 |
+| 狀態指示燈 | `PC6` | `IND` | 校正執行期間點亮 |
+
+> 實際接線時，`MPU6050 / MPU6500` 與 OLED 仍需另外接妥 `VCC` 與 `GND`。若 I2C 模組板上沒有內建上拉，需補上適當的 `SCL/SDA` 上拉電阻。
+
+## 程式流程圖
+
+```mermaid
+flowchart TD
+    A[main] --> B[HAL / Clock / GPIO / DMA / I2C Init]
+    B --> C[osKernelInitialize]
+    C --> D[MX_FREERTOS_Init]
+    D --> E[Service_Init]
+    D --> F[建立 defaultTask]
+    D --> G[建立 mpuReadTask]
+    D --> H[建立 oledTask]
+    E --> I[建立 semaphore 與初始化 Kalman]
+    F --> J[Button_Process_Task]
+    G --> K[MPU6050_Read_Task]
+    H --> L[OLED_Display_Task]
+
+    J --> J1[等待 PC13 中斷]
+    J1 --> J2[消抖與等待按鍵放開]
+    J2 --> J3[設定 calibrate_flag]
+    J3 --> J1
+
+    K --> K1[MPU6050_Sensor_Init]
+    K1 --> K2[偵測位址與 WHO_AM_I]
+    K2 --> K3[設定 100Hz / DLPF / INT]
+    K3 --> K4[等待 MPU 中斷 semaphore]
+    K4 --> K5[讀取 INT_STATUS 與感測資料]
+    K5 --> K6[計算 accel angle / gyro rate]
+    K6 --> K7[必要時執行校正]
+    K7 --> K8[Kalman_Update]
+    K8 --> K4
+
+    L --> L1[OLED 初始化與狀態顯示]
+    L1 --> L2[建立背景緩衝與十字線]
+    L2 --> L3[讀取姿態快照]
+    L3 --> L4[計算氣泡座標]
+    L4 --> L5[計算舊/新位置聯集區域]
+    L5 --> L6[恢復背景]
+    L6 --> L7[繪製新氣泡]
+    L7 --> L8[區域刷新 OLED]
+    L8 --> L3
+```
+
+## 顯示流程
+
+`OLED_Display_Task()` 啟動後會：
+
+1. 初始化 OLED 並顯示開機訊息
+2. 建立 128x64 顯示緩衝與背景緩衝
+3. 畫出十字基準線並保存為靜態背景
+4. 依照目前姿態角與校正零點計算氣泡位置
+5. 以舊位置與新位置的聯集矩形做背景恢復與區域刷新
+
+目前顯示更新週期約為 `30 ms` 一次，氣泡位置直接由角度映射，不再額外做顯示平滑。
+
+## 感測流程
+
+`MPU6050_Read_Task()` 啟動後會：
+
+1. 偵測感測器位址與 `WHO_AM_I`
+2. 重置並喚醒感測器
+3. 設定採樣率、DLPF 與中斷輸出
+4. 等待 MPU 中斷 semaphore
+5. 讀取 `INT_STATUS` 與 14-byte 感測資料
+6. 由加速度計推算傾角、由陀螺儀推算角速度
+7. 執行校正邏輯並更新 Kalman 狀態
 
 ## 主要檔案
 
-- `Core/Src/main.c`
-  系統進入點與週邊初始化
-- `Core/Src/app_freertos.c`
-  FreeRTOS 任務建立與排程
-- `Core/Src/service.c`
-  主邏輯：OLED 顯示、MPU6050/MPU6500 初始化與讀取、Kalman 濾波、按鍵校正
-- `Core/Src/kalman.c`
-  一維 Kalman Filter 實作
 - `Core/Inc/service.h`
-  服務函式宣告
+  MPU 讀取、按鍵處理與服務狀態查詢介面
+- `Core/Inc/OLED_service.h`
+  OLED 顯示任務介面
 - `Core/Inc/kalman.h`
   Kalman 結構與 API
-- `Core/OLED_128x64/OLED128x64_Fast.*`
-  **🔹 更新**：OLED 高效驅動，支援 I2C Timeout 自動跳脫機制，確保系統穩定性
+- `Core/OLED_128x64/OLED128x64_Fast.c`
+  OLED 基礎驅動
+- `Core/OLED_128x64/OLED128x64_Fast.h`
+  OLED 驅動宣告
 - `testG431CBU6withMPU6050.ioc`
   STM32CubeMX 專案設定
 - `CMakeLists.txt`
   CMake 建置入口
 
-## 主要功能說明
+## Kalman 參數
 
-### `Service_Init(void)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 建立按鍵 semaphore `binSemButtonHandle`
-- 建立 MPU 中斷 semaphore `binSemMpuIntHandle`
-- 建立 I2C1 DMA 完成 semaphore `binSemI2c1DoneHandle`
-- 初始化 Kalman Filter 物件 `kalmanX`、`kalmanY`
-
-預設參數：
+目前初始化設定如下：
 
 ```c
 Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.005f);
 Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.005f);
 ```
 
-### `MPU6050_Sensor_Init(void)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 透過 `I2C1` 讀取 `MPU6050` / `MPU6500` 的 `WHO_AM_I`
-- 若回應 `0x70`，表示感測器更可能為 `MPU6500` 或其變體
-- 支援 `0xD0` 和 `0xD2` 兩個 I2C 地址
-- 若偵測到感測器，則重置並喚醒裝置
-- 設定 100Hz 採樣率與 DLPF
-- 初始化中斷設定
-
-### `MPU6050_Read_Task(void)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 等待 `binSemMpuIntHandle`
-- 讀取 `MPU6050_INT_STATUS`
-- 使用 DMA 讀取 14 字節加速度與陀螺儀資料，並等待 `binSemI2c1DoneHandle`
-- 計算時間差 `dt`
-- 將原始加速度資料轉換成 `accel_angle_x`、`accel_angle_y`
-- 扣除陀螺儀偏移並轉成角速度
-- 執行按鍵校正與零點更新
-- 呼叫 `Kalman_Update()` 計算濾波後角度
-- 若 DMA 失敗，提供後備阻塞讀取機制
-
-### `OLED_Display_Task(void)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- **🔹 高效 OLED 動畫顯示任務**
-- 初始化雙緩衝區：`OLED_Buffer` (動態繪圖) 與 `OLED_Background` (靜態背景)
-- 繪製十字基準線並備份到背景緩衝區
-- 動態計算氣泡位置，限制邊界防止出界
-- 使用區域刷新技術：僅更新舊位置與新位置的像素區域，極大減少 I2C 通信
-- 實現流暢的氣泡動畫，每 30ms 更新一次
-
-### `OLED_DrawPixel(int x, int y, uint8_t color)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 在 OLED_Buffer 中繪製單個像素
-- 支持黑色 (0) 和白色 (1) 顏色
-
-### `OLED_DrawBubble(int x, int y, uint8_t color)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 在指定位置繪製 8x8 氣泡圖形
-- 使用 OLED_DrawPixel 實現圓形氣泡
-
-### `OLED_Refresh_Region(int x, int y, int w, int h)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- **🔹 區域刷新核心函式**
-- 僅傳送指定矩形區域的緩衝區資料到 OLED
-- 極大節省 I2C 頻寬，提升動畫性能
-
-### `OLED_Restore_BG(int x, int y, int w, int h)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 從 OLED_Background 恢復指定區域到 OLED_Buffer
-- 用於清除舊的動態元素，準備繪製新位置
-
-### `Button_Process_Task(void)`
-
-位置：`Core/Src/service.c`
-
-用途：
-
-- 等待按鍵中斷 semaphore
-- 執行簡單消抖
-- 等待按鍵放開
-- 設定 `calibrate_flag = 1`
-- 觸發下一次讀取時進行校正
-
-## Kalman Filter API
-
-### 結構
-
-```c
-typedef struct {
-    float Q_angle;
-    float Q_bias;
-    float R_measure;
-    float angle;
-    float bias;
-    float P[2][2];
-} Kalman_t;
-```
-
-### `Kalman_Init(Kalman_t *Kalman, float Q_angle, float Q_bias, float R_measure)`
-
-用途：
-
-- 初始化 Kalman 參數
-- 將 `angle`、`bias` 與誤差協方差矩陣清零
-
-### `Kalman_Update(Kalman_t *Kalman, float newAngle, float newRate, float dt)`
-
-用途：
-
-- 結合加速度計角度 `newAngle`
-- 結合陀螺儀角速度 `newRate`
-- 使用時間差 `dt` 計算濾波後角度
-- 回傳融合後角度
-
-## 角度映射與平滑
-
-在 `OLED_Display_Task()` 中，傾角會映射成 OLED 氣泡座標：
-
-```c
-float target_x = 64.0f + ((local_angle_x - local_offset_x) * 2.0f);
-float target_y = 32.0f - 為了反映真實動態，移除額外平滑，直接使用 `target_x` 和 `target_y`th_y * 0.5f + target_y * 0.5f;
-```
-
-降低顯示抖動，使氣泡運動更穩定。
-
-### `Kalman_Init(Kalman_t *Kalman, float Q_angle, float Q_bias, float R_measure)`
-
-用途：
-
-- 設定 Kalman 參數
-- 將角度、偏移、協方差矩陣清零
-
-典型用法：
-
-```c
-Kalman_t kalmanX;
-Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.01f);
-```
-
-注意事項：
-
-- `Q_angle`、`Q_bias`、`R_measure` 應為正值
-- 不建議小於 `1e-6`
-- 初始化後若已知目前角度，可手動指定 `kalmanX.angle = current_angle`
-
-### `Kalman_Update(Kalman_t *Kalman, float newAngle, float newRate, float dt)`
-
-用途：
-
-- 根據加速度計量測角 `newAngle`
-- 根據陀螺儀角速度 `newRate`
-- 結合時間差 `dt`
-- 回傳濾波後角度
-
-典型用法：
-
-```c
-float filtered = Kalman_Update(&kalmanX, accel_angle_x, gyro_rate_x, dt);
-```
-
-參數意義：
-
-- `newAngle`
-  由加速度計計算出的角度，適合提供長期參考
-- `newRate`
-  由陀螺儀得到的角速度，適合短期動態追蹤
-- `dt`
-  兩次更新的時間差，單位秒
-
-## 角度與畫面映射
-
-在 `MPU6050_BubbleLevel_Task()` 中，傾角會映射成畫面座標：
-
-```c
-float target_x = 64.0f + ((angle_x - offset_angle_x) * 2.0f);
-float target_y = 32.0f - ((angle_y - offset_angle_y) * 2.0f);
-```
-
-畫面中心 `(64, 32)` 代表校正後的水平位置。`offset_angle_x` 與 `offset_angle_y` 用來保留校正零點。
-
-接著再做一次平滑：
-
-```c
-smooth_x = smooth_x * 0.5f + target_x * 0.5f;
-smooth_y = smooth_y * 0.5f + target_y * 0.5f;
-```
-
-這會讓畫面比較穩，但也會增加一點延遲。
-
-## Kalman 參數調整指南
-
-以下內容整合自 `Kalman_Filter_設定方法.txt`，可作為實機調參依據。
-
-### 三個核心參數
-
-- `Q_angle`
-  角度過程雜訊。值越大，濾波器越願意接受快速變化，反應更快，但雜訊也會增加。
-- `Q_bias`
-  陀螺儀偏移雜訊。值越大，偏移修正速度越快。
-- `R_measure`
-  測量雜訊。值越小，代表越信任加速度計，對慢速傾斜會更敏感，但也更容易受震動影響。
-
-### 建議範圍
-
-| 參數 | 建議範圍 | 典型值 |
-| --- | --- | --- |
-| `Q_angle` | `0.0001 ~ 0.01` | `0.001` |
-| `Q_bias` | `0.001 ~ 0.01` | `0.003` |
-| `R_measure` | `0.01 ~ 0.5` | `0.03` |
-
-### 目前專案偏向的設定
-
-```c
-Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.01f);
-Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
-```
-
-這組設定相對偏靈敏，適合讓氣泡對慢速傾斜也有明顯反應。
-
-### 常見現象與調整方向
-
-- 如果「翻轉很靈敏，但水平慢慢移動幾乎沒反應」
-  優先降低 `R_measure`，並適度提高 `Q_angle`
-- 如果「靜止時氣泡抖動明顯」
-  提高 `R_measure`，或降低 `Q_angle`
-- 如果「看起來有拖地感」
-  除了 Kalman 參數，也要檢查畫面平滑係數 `smooth = smooth * a + target * (1-a)`
-
-### 實際調整建議
-
-較穩定的起點：
-
-```c
-Kalman_Init(&kalmanX, 0.001f, 0.003f, 0.03f);
-Kalman_Init(&kalmanY, 0.001f, 0.003f, 0.03f);
-```
-
-較靈敏的起點：
-
-```c
-Kalman_Init(&kalmanX, 0.005f, 0.003f, 0.01f);
-Kalman_Init(&kalmanY, 0.005f, 0.003f, 0.01f);
-```
-
-若要進一步提高畫面直接性，可把顯示平滑改為：
-
-```c
-smooth_x = smooth_x * 0.5f + target_x * 0.5f;
-smooth_y = smooth_y * 0.5f + target_y * 0.5f;
-```
-
-或測試時先直接關閉：
-
-```c
-smooth_x = target_x;
-smooth_y = target_y;
-```
-
-## FPU 對 Kalman Filter 的影響
-
-以下內容整合自 `FPU對KalmanFilter的影響討論.txt`。
-
-### 結論先說
-
-- 對目前的 `STM32G431` 而言，Kalman Filter 非常輕鬆，因為它是 `Cortex-M4F`，具備硬體 FPU。
-- 若 MCU 沒有 FPU，Kalman Filter 仍然可用，但浮點乘除會明顯增加 CPU 負擔。
-- 對 `100Hz` 這類低頻應用，沒有 FPU 通常也還能接受。
-- 對 `1kHz` 以上更新率，FPU、DMA 與非阻塞式通訊就變得很重要。
-
-### 為什麼 Kalman 比互補濾波重
-
-互補濾波大致只需要少量乘加：
-
-```c
-angle = 0.98f * (angle + gyro * dt) + 0.02f * accel;
-```
-
-Kalman Filter 則包含：
-
-- 狀態預測
-- 協方差矩陣更新
-- 增益計算
-- 一次浮點除法
-
-在沒有 FPU 的 MCU 上，浮點除法特別昂貴。
-
-### 沒有 FPU 時的實際影響
-
-- 單次 `Kalman_Update()` 執行時間會大幅增加
-- CPU 使用率上升
-- 中斷延遲風險增加
-- 功耗提高
-
-但對本專案目前約 `100Hz` 的更新週期來說，通常不至於造成系統無法運作。
-
-### 96MHz、32-bit、無 FPU、1kHz 是否可行
-
-整理後的判斷是：可以，而且重點瓶頸通常不是 Kalman 本身，而是感測器通訊。
-
-原因：
-
-- 1D Kalman 的浮點運算量雖然不小，但在 `96MHz` 的 32-bit MCU 上，兩軸估算通常仍在可接受範圍
-- 若每次都用阻塞式 `I2C` 讀取 `MPU6050` 的 14 bytes，總線等待時間常比濾波計算更傷即時性
-
-因此若系統往高更新率發展，建議：
-
-- 使用 `I2C + DMA`
-- 或改用更高速的 `SPI`
-- 必要時改成定點數運算
-
-## 任務與即時性注意事項
-
-- `bubbleLevelTask` 目前使用 `osDelay(10)`，實際更新率約 `100Hz`
-- 感測器讀取使用阻塞式 `HAL_I2C_Mem_Read()`
-- OLED 更新也使用阻塞式 I2C 傳輸
-- 若未來要提升到 `500Hz` 或 `1kHz`，建議優先重新設計通訊方式，而不是只調 Kalman 參數
+這組參數偏向較靈敏的反應。若靜止時顯示抖動過大，可優先調高 `R_measure`；若慢速傾斜反應不足，可嘗試提高 `Q_angle` 或降低 `R_measure`。
+
+## 硬體設定摘要
+
+根據目前程式與 CubeMX 設定：
+
+- MCU：`STM32G431CBU6`
+- `I2C1`：連接 `MPU6050 / MPU6500`
+- `I2C3`：連接 `OLED`
+- `USART2`：保留作為序列埠
+- `FreeRTOS`：CMSIS-V2
+- `DMA1 Channel1`：`I2C1_RX`
+- `DMA1 Channel2`：`I2C3_TX`
 
 ## 建置方式
 
-本專案可由 CubeMX/CubeIDE 維護，也可透過 CMake 建置。
+本專案可由 CubeMX / CubeIDE 維護，也可透過 CMake 建置。
 
 ### CMake
 
-專案根目錄已提供 `CMakeLists.txt` 與 `CMakePresets.json`。
+專案根目錄提供：
+
+- `CMakeLists.txt`
+- `CMakePresets.json`
+- `cmake/gcc-arm-none-eabi.cmake`
+- `cmake/stm32cubemx/CMakeLists.txt`
 
 常見流程如下：
 
 ```bash
-cmake -S . -B build
-cmake --build build
+cmake --preset Debug
+cmake --build --preset Debug
 ```
 
-交叉編譯器設定位於：
+或：
 
-- `cmake/gcc-arm-none-eabi.cmake`
-- `cmake/stm32cubemx/CMakeLists.txt`
+```bash
+cmake --preset Release
+cmake --build --preset Release
+```
 
-## 硬體設定摘要
+## 目前狀態說明
 
-根據 `testG431CBU6withMPU6050.ioc`：
-
-- MCU：`STM32G431CBU6`
-- 系統時脈：`48 MHz`
-- `I2C1`：連接 `MPU6050`
-- `I2C3`：連接 `OLED`
-- `USART2`：保留作為序列埠
-- `FreeRTOS`：CMSIS-V2
-- `configENABLE_FPU = 1`
-- `configTOTAL_HEAP_SIZE = 10240`
+- OLED 顯示邏輯已從 `service.c` 拆分到獨立的 `OLED_service.c/.h`
+- `service.c` 現在專注在 MPU、按鍵與服務資料提供
+- README 已移除舊版中關於顯示平滑、OLED 仍位於 `service.c`、以及與目前程式不一致的描述
 
 ## 後續可優化方向
 
-- 將 `MPU6050` 位址選擇邏輯改成初始化後保存，不要每次固定讀 `0xD0`
-- 把感測器讀取改成 `DMA` 或中斷驅動
-- 為 Kalman 參數與畫面平滑係數加入集中式設定區
-- 增加 UART 診斷輸出，方便觀察角度與原始感測值
-
+- 為 MPU DMA 讀取流程補上更完整的同步與錯誤處理
+- 在 OLED 顯示更新中加入「座標未變時跳過刷新」的判斷
+- 將感測器與顯示參數集中管理，便於後續調校
+- 增加 UART 診斷輸出，方便觀察角度、零點與感測器狀態

@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file    service.h
-  * @brief   此文件包含按鍵與指示燈控制的服務函式定義
+  * @brief   此文件定義 MPU 讀取、按鍵處理與服務狀態查詢介面
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -21,14 +21,19 @@ extern "C" {
 extern osSemaphoreId_t binSemButtonHandle;
 extern osSemaphoreId_t binSemMpuIntHandle;
 
-/* 服務初始化與處理函式 */
+/* 感測與狀態查詢介面 */
+void Service_GetOrientationSnapshot(float *angle_x,
+                                    float *angle_y,
+                                    float *offset_angle_x,
+                                    float *offset_angle_y);
+uint8_t Service_GetMpuInitStatus(void);
+
+/* 服務初始化與控制函式 */
 void Service_Init(void);
 void Button_Process_Task(void);
-void Service_OLED_DisplayInfo(void);
 
 /* 任務函式 */
 void MPU6050_Read_Task(void);
-void OLED_Display_Task(void);
 
 #ifdef __cplusplus
 }
